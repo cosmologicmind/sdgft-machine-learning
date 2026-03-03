@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -5,19 +6,31 @@ dist/
 build/
 .eggs/
 *.egg
+
+# Environments
 .venv/
 venv/
 .env
-*.pt
-*.pth
-*.ckpt
+
+# Data (generated at runtime)
 data/*.parquet
 data/*.csv
 data/*.json
+
+# Training runs (top-level only; notebook checkpoints ARE tracked)
+/runs/
+
+# Weights & Biases
 wandb/
-runs/
-outputs/
+
+# IDE & tools
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
 *.ipynb_checkpoints/
+.ipynb_checkpoints/
+outputs/
+
+# OS
+.DS_Store
+Thumbs.db

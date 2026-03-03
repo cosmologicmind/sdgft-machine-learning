@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: "SDGFT-ML: Machine-Learning Surrogate and Inverter for Six-Dimensional Geometric Field Theory"
+message: >-
+  If you use this software, please cite it using the metadata from this file.
+type: software
+authors:
+  - given-names: David A.
+    family-names: Besemer
+    orcid: ""
+repository-code: "https://github.com/cosmologicmind/sdgft-machine-learning"
+url: "https://github.com/cosmologicmind/sdgft-machine-learning"
+license: MIT
+version: "0.1.0"
+date-released: "2026-03-03"
+abstract: >-
+  Machine-learning pipeline for Six-Dimensional Geometric Field Theory (SDGFT).
+  Trains GATv2-based surrogate GNNs on the full SDGFT observable DAG
+  (37 observables from 2 axiom parameters Δ, δ_g plus φ), a conditional VAE
+  inverter for the inverse problem (observables → axiom parameters), ensemble
+  uncertainty quantification, active learning, anomaly detection, and
+  experimental validation against Planck 2018, PDG 2024, NuFIT 5.3, SPARC,
+  DESI, KiDS, and other datasets. Achieves R² = 0.9995 round-trip fidelity
+  and χ²/ndof = 1.48 across 22 observables with zero free parameters.
+keywords:
+  - theoretical physics
+  - machine learning
+  - graph neural networks
+  - cosmology
+  - particle physics
+  - surrogate model
+  - geometric field theory
+  - neutrino physics
+  - dark energy
+  - Tully-Fisher relation

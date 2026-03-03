@@ -5,11 +5,36 @@ build-backend = "hatchling.build"
 [project]
 name = "sdgft-ml"
 version = "0.1.0"
-description = "ML surrogate, inverter & anomaly detector for SDGFT theory"
+description = "ML surrogate, inverter & anomaly detector for Six-Dimensional Geometric Field Theory"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "David A. Besemer" }]
+keywords = [
+    "theoretical physics",
+    "machine learning",
+    "graph neural networks",
+    "surrogate model",
+    "cosmology",
+    "particle physics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/cosmologicmind/sdgft-machine-learning"
+Repository = "https://github.com/cosmologicmind/sdgft-machine-learning"
+Issues = "https://github.com/cosmologicmind/sdgft-machine-learning/issues"
 
 dependencies = [
     "torch>=2.1",
