@@ -70,6 +70,14 @@ class InverterConfig:
     n_hidden: int = 3
     seed: int = 42
     save_dir: str = "runs/inverter"
+    # v3: per-parameter loss weights  [Δ, δ_g, φ]
+    param_weights: list[float] | None = None
+    # v3: sensitivity-weighted observable features
+    use_sensitivity_weights: bool = False
+    # v3: log-scale augmented features (doubles input dim)
+    use_log_features: bool = False
+    # v3: cosine annealing for LR
+    cosine_annealing: bool = False
 
 
 @dataclass
@@ -117,10 +125,30 @@ def train_inverter(
     observables = df[obs_keys].values.astype(np.float32)
     params = df[param_keys].values.astype(np.float32)
 
+    # v3: log-scale augmented features
+    if config.use_log_features:
+        obs_log = np.log1p(np.abs(observables)) * np.sign(observables)
+        observables = np.concatenate([observables, obs_log], axis=1)
+        print(f"  Log features enabled: input dim {observables.shape[1]}")
+
     # Normalize observables
     obs_mean = observables.mean(axis=0)
     obs_std = observables.std(axis=0)
     obs_std[obs_std < 1e-12] = 1.0
+
+    # v3: sensitivity-weighted features (rescale columns)
+    sens_weights_np = None
+    if config.use_sensitivity_weights:
+        from .sensitivity import compute_jacobian, combined_sensitivity_weights
+        J, _, _ = compute_jacobian()
+        if config.use_log_features:
+            # Duplicate weights for log features
+            w = combined_sensitivity_weights(J, alpha=1.5)
+            sens_weights_np = np.concatenate([w, w])
+        else:
+            sens_weights_np = combined_sensitivity_weights(J, alpha=1.5)
+        print(f"  Sensitivity weights: min={sens_weights_np.min():.3f}, "
+              f"max={sens_weights_np.max():.3f}")
 
     # Optionally normalize parameters to [0,1] for balanced MSE
     param_min = params.min(axis=0) if config.normalize_params else None
@@ -151,7 +179,7 @@ def train_inverter(
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
 
     # Model
-    n_obs = len(obs_keys)
+    n_obs = observables.shape[1]  # may be 2x if log features
     model = InverterCVAE(
         n_observables=n_obs,
         n_params=len(param_keys),
@@ -160,16 +188,35 @@ def train_inverter(
         n_hidden=config.n_hidden,
     ).to(device)
 
+    # CRITICAL: when normalize_params=True, targets are in [0,1],
+    # so the model's sigmoid output range must also be [0,1].
+    if config.normalize_params:
+        with torch.no_grad():
+            model.param_min.fill_(0.0)
+            model.param_max.fill_(1.0)
+        print("  Output range adjusted to [0,1] for normalized params")
+
     n_params_total = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params_total:,}")
+
+    # v3: per-parameter loss weights
+    pw = None
+    if config.param_weights is not None:
+        pw = torch.tensor(config.param_weights, dtype=torch.float32, device=device)
+        print(f"  Param weights: {config.param_weights}")
 
     # Optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=config.scheduler_patience, factor=config.scheduler_factor,
-    )
+    if config.cosine_annealing:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=config.n_epochs // 3, T_mult=2, eta_min=1e-6,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=config.scheduler_patience, factor=config.scheduler_factor,
+        )
 
     # Training
     history = InverterHistory()
@@ -202,6 +249,7 @@ def train_inverter(
             total, recon, kl = model.loss(
                 params_pred, params_batch, mu, logvar,
                 beta=beta, free_bits=config.free_bits,
+                param_weights=pw,
             )
 
             optimizer.zero_grad()
@@ -228,7 +276,10 @@ def train_inverter(
 
         t_loss = np.mean(epoch_loss)
         v_loss = np.mean(val_losses)
-        scheduler.step(v_loss)
+        if config.cosine_annealing:
+            scheduler.step(epoch)
+        else:
+            scheduler.step(v_loss)
 
         history.train_loss.append(t_loss)
         history.val_loss.append(v_loss)
