@@ -59,6 +59,10 @@ class InverterConfig:
     beta_start: float = 0.0
     beta_end: float = 1.0
     beta_warmup_epochs: int = 50
+    beta_cyclical: bool = False
+    beta_n_cycles: int = 4
+    free_bits: float = 0.0
+    normalize_params: bool = False
     n_samples: int = 5000
     val_frac: float = 0.15
     hidden_dim: int = 128
@@ -118,6 +122,16 @@ def train_inverter(
     obs_std = observables.std(axis=0)
     obs_std[obs_std < 1e-12] = 1.0
 
+    # Optionally normalize parameters to [0,1] for balanced MSE
+    param_min = params.min(axis=0) if config.normalize_params else None
+    param_max = params.max(axis=0) if config.normalize_params else None
+    if config.normalize_params:
+        param_range = param_max - param_min
+        param_range[param_range < 1e-12] = 1.0
+        params_norm = (params - param_min) / param_range
+    else:
+        params_norm = params
+
     # Split
     n_val = int(len(params) * config.val_frac)
     rng = np.random.default_rng(config.seed)
@@ -125,10 +139,10 @@ def train_inverter(
     val_idx, train_idx = indices[:n_val], indices[n_val:]
 
     train_ds = InverterDataset(
-        observables[train_idx], params[train_idx], obs_mean, obs_std,
+        observables[train_idx], params_norm[train_idx], obs_mean, obs_std,
     )
     val_ds = InverterDataset(
-        observables[val_idx], params[val_idx], obs_mean, obs_std,
+        observables[val_idx], params_norm[val_idx], obs_mean, obs_std,
     )
 
     train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
@@ -163,8 +177,13 @@ def train_inverter(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(config.n_epochs):
-        # β-warmup: linearly increase KL weight
-        if epoch < config.beta_warmup_epochs:
+        # β-schedule: cyclical or monotonic warmup
+        if config.beta_cyclical:
+            # Cyclical annealing: N full warmup cycles
+            cycle_len = config.n_epochs / config.beta_n_cycles
+            t = (epoch % cycle_len) / max(config.beta_warmup_epochs, 1)
+            beta = config.beta_start + (config.beta_end - config.beta_start) * min(t, 1.0)
+        elif epoch < config.beta_warmup_epochs:
             beta = config.beta_start + (
                 (config.beta_end - config.beta_start)
                 * epoch / config.beta_warmup_epochs
@@ -181,7 +200,8 @@ def train_inverter(
 
             params_pred, mu, logvar = model(obs_batch)
             total, recon, kl = model.loss(
-                params_pred, params_batch, mu, logvar, beta=beta,
+                params_pred, params_batch, mu, logvar,
+                beta=beta, free_bits=config.free_bits,
             )
 
             optimizer.zero_grad()
@@ -222,6 +242,9 @@ def train_inverter(
                 "model_state": model.state_dict(),
                 "obs_mean": obs_mean,
                 "obs_std": obs_std,
+                "param_min": param_min,
+                "param_max": param_max,
+                "normalize_params": config.normalize_params,
             }, save_dir / "best_inverter.pt")
 
         if (epoch + 1) % 30 == 0 or epoch == 0:

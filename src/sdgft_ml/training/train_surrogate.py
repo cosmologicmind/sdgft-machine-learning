@@ -58,12 +58,12 @@ def _prepare_data(
     n_samples: int = 2000,
     val_frac: float = 0.15,
     seed: int = 42,
-) -> tuple[SDGFTGraphDataset, SDGFTGraphDataset, np.ndarray]:
+) -> tuple[SDGFTGraphDataset, SDGFTGraphDataset, np.ndarray, np.ndarray, np.ndarray]:
     """Generate sweep data and split into train/val datasets.
 
     Returns
     -------
-    train_ds, val_ds, edge_index
+    train_ds, val_ds, edge_index, norm_mean, norm_std
     """
     print(f"Generating {n_samples} parameter sweep samples (LHS)...")
     df = sweep_latin_hypercube(n_samples=n_samples, seed=seed)
@@ -97,7 +97,7 @@ def _prepare_data(
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}, "
           f"Nodes: {len(names)}, Edges: {edge_index.shape[1]}")
 
-    return train_ds, val_ds, edge_index
+    return train_ds, val_ds, edge_index, target_means, target_stds
 
 
 # ── Training loop ─────────────────────────────────────────────────
@@ -120,6 +120,10 @@ class TrainConfig:
     dropout: float = 0.1
     seed: int = 42
     save_dir: str = "runs/surrogate"
+    # Hybrid loss: α * MSE + (1-α) * log-cosh for better tail behavior
+    loss_alpha: float = 1.0
+    cosine_annealing: bool = False
+    cosine_T_max: int = 0
 
 
 @dataclass
@@ -130,6 +134,9 @@ class TrainHistory:
     lr_history: list[float] = field(default_factory=list)
     best_val_loss: float = float("inf")
     best_epoch: int = 0
+    # Filled in by train_surrogate:
+    norm_mean: np.ndarray = field(default_factory=lambda: np.array([]))
+    norm_std:  np.ndarray = field(default_factory=lambda: np.array([]))
 
 
 def train_surrogate(
@@ -160,7 +167,7 @@ def train_surrogate(
     print(f"Config: {config}")
 
     # Data
-    train_ds, val_ds, edge_index = _prepare_data(
+    train_ds, val_ds, edge_index, norm_mean, norm_std = _prepare_data(
         n_samples=config.n_samples,
         val_frac=config.val_frac,
         seed=config.seed,
@@ -193,18 +200,38 @@ def train_surrogate(
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        patience=config.scheduler_patience,
-        factor=config.scheduler_factor,
-    )
+    if config.cosine_annealing:
+        t_max = config.cosine_T_max if config.cosine_T_max > 0 else config.n_epochs
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=t_max // 3, T_mult=2, eta_min=1e-6,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            patience=config.scheduler_patience,
+            factor=config.scheduler_factor,
+        )
     loss_fn = nn.MSELoss()
+
+    def hybrid_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """MSE + log-cosh for better handling of outlier observables."""
+        alpha = config.loss_alpha
+        if alpha >= 1.0:
+            return loss_fn(pred, target)
+        mse = loss_fn(pred, target)
+        diff = pred - target
+        logcosh = torch.mean(torch.log(torch.cosh(diff + 1e-12)))
+        return alpha * mse + (1.0 - alpha) * logcosh
 
     # Training
     history = TrainHistory()
+    history.norm_mean = norm_mean
+    history.norm_std  = norm_std
     save_dir = Path(config.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    # Save normalization stats for later denormalization
+    np.savez(save_dir / "norms.npz", mean=norm_mean, std=norm_std)
 
     def _expand_edge_index(batch_size: int) -> torch.Tensor:
         """Expand edge index for a batch of graphs."""
@@ -223,7 +250,7 @@ def train_surrogate(
 
             pred = model(params, ei)  # (B * n_nodes,)
             target_flat = targets.reshape(-1)
-            loss = loss_fn(pred, target_flat)
+            loss = hybrid_loss(pred, target_flat)
 
             optimizer.zero_grad()
             loss.backward()
@@ -246,7 +273,10 @@ def train_surrogate(
         train_loss = np.mean(train_losses)
         val_loss = np.mean(val_losses)
         lr = optimizer.param_groups[0]["lr"]
-        scheduler.step(val_loss)
+        if config.cosine_annealing:
+            scheduler.step(epoch)
+        else:
+            scheduler.step(val_loss)
 
         history.train_loss.append(train_loss)
         history.val_loss.append(val_loss)

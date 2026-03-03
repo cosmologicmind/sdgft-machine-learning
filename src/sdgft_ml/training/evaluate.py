@@ -87,6 +87,8 @@ def canary_test(
     edge_index: np.ndarray | torch.Tensor,
     device: str = "cpu",
     tolerance: float = 0.05,
+    norm_mean: np.ndarray | None = None,
+    norm_std: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Canary test: evaluate the surrogate at the true SDGFT point.
 
@@ -100,6 +102,8 @@ def canary_test(
     device : str
     tolerance : float
         Relative tolerance for "pass" status.
+    norm_mean, norm_std : arrays (optional)
+        If provided, denormalize the model's output before comparison.
 
     Returns
     -------
@@ -130,6 +134,10 @@ def canary_test(
     with torch.no_grad():
         params = torch.tensor([delta, delta_g, phi], dtype=torch.float32).unsqueeze(0).to(device)
         pred = model(params, ei).cpu().numpy()
+
+    # Denormalize if stats are provided
+    if norm_mean is not None and norm_std is not None:
+        pred = pred * norm_std + norm_mean
 
     # Compute relative errors
     rel_errors = {}

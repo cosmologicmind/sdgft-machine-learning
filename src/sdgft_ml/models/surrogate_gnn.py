@@ -205,9 +205,10 @@ class SurrogateGNN(nn.Module):
 
         self.eval()
         with torch.no_grad():
+            device = next(self.parameters()).device
             params = torch.tensor(
                 [delta, delta_g, phi], dtype=torch.float32
-            ).unsqueeze(0)
+            ).unsqueeze(0).to(device)
             pred = self.forward(params, edge_index)
             names = observable_names()
             return {n: pred[i].item() for i, n in enumerate(names)}
@@ -238,9 +239,10 @@ class SurrogateGNNWithUncertainty(SurrogateGNN):
         from ..data.dag_builder import observable_names
 
         self.train()  # enable dropout
+        device = next(self.parameters()).device
         params = torch.tensor(
             [delta, delta_g, phi], dtype=torch.float32
-        ).unsqueeze(0)
+        ).unsqueeze(0).to(device)
 
         preds = []
         with torch.no_grad():

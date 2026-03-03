@@ -137,6 +137,7 @@ class InverterCVAE(nn.Module):
         mu: torch.Tensor,
         logvar: torch.Tensor,
         beta: float = 1.0,
+        free_bits: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """ELBO loss = reconstruction + β · KL divergence.
 
@@ -147,13 +148,21 @@ class InverterCVAE(nn.Module):
         mu, logvar : (B, latent_dim) encoder outputs
         beta : float
             KL weight (β-VAE).
+        free_bits : float
+            Minimum KL per latent dimension (nats). Prevents KL collapse
+            by ensuring the encoder always uses at least this much capacity.
 
         Returns
         -------
         total_loss, recon_loss, kl_loss
         """
         recon = F.mse_loss(params_pred, params_true, reduction="mean")
-        kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        # Per-dimension KL: 0.5 * (σ² + μ² - 1 - log σ²)
+        kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())  # (B, latent_dim)
+        if free_bits > 0:
+            # Clamp each dimension's KL to at least free_bits
+            kl_per_dim = torch.clamp(kl_per_dim, min=free_bits)
+        kl = kl_per_dim.mean()
         total = recon + beta * kl
         return total, recon, kl
 

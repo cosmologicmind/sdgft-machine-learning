@@ -111,9 +111,12 @@ class AnomalyDetector:
         n_features: int = 36,
         hidden_dim: int = 64,
         bottleneck_dim: int = 8,
+        threshold_quantile: float = 0.95,
         device: str = "cpu",
     ):
         self.device = device
+        self.threshold_quantile = threshold_quantile
+        self.threshold: float = float("inf")   # set after fit_on_observations
         self.model = ResidualAutoencoder(
             n_features=n_features,
             hidden_dim=hidden_dim,
@@ -126,12 +129,15 @@ class AnomalyDetector:
         n_epochs: int = 100,
         batch_size: int = 64,
         lr: float = 1e-3,
+        verbose: bool = False,
     ) -> list[float]:
-        """Train the autoencoder on residual data.
+        """Train the autoencoder on residual/observation data.
 
         Parameters
         ----------
-        residuals : (N, n_features) — residual vectors
+        residuals : (N, n_features) — data vectors (observations or residuals)
+        verbose : bool
+            Print epoch losses periodically.
 
         Returns
         -------
@@ -158,8 +164,49 @@ class AnomalyDetector:
                 optimizer.step()
                 epoch_loss.append(loss.item())
             loss_history.append(np.mean(epoch_loss))
+            if verbose and ((epoch + 1) % 20 == 0 or epoch == 0):
+                print(f"  Autoencoder Epoch {epoch+1:3d}/{n_epochs} — Loss: {loss_history[-1]:.6f}")
 
+        # Compute threshold from training data
+        self.model.eval()
+        with torch.no_grad():
+            train_scores = self.model.anomaly_score(data).cpu().numpy()
+        self.threshold = float(np.quantile(train_scores, self.threshold_quantile))
+        if verbose:
+            print(f"  Threshold ({self.threshold_quantile:.0%}-Quantil): {self.threshold:.6f}")
         return loss_history
+
+    @dataclass
+    class _ScoreResult:
+        scores: np.ndarray
+        is_anomaly: np.ndarray
+
+    def score_observations(
+        self,
+        observations: np.ndarray,
+    ) -> "_ScoreResult":
+        """Score a set of observation vectors using the fitted autoencoder.
+
+        Parameters
+        ----------
+        observations : (N, n_features) float32 array
+
+        Returns
+        -------
+        object with `.scores` (N,) and `.is_anomaly` (N,) bool
+        """
+        self.model.eval()
+        data = torch.from_numpy(observations.astype(np.float32)).to(self.device)
+        with torch.no_grad():
+            scores = self.model.anomaly_score(data).cpu().numpy()
+        is_anomaly = scores > self.threshold
+
+        class _R:
+            pass
+        r = _R()
+        r.scores = scores
+        r.is_anomaly = is_anomaly
+        return r
 
     def detect(
         self,
