@@ -58,6 +58,7 @@ def _prepare_data(
     n_samples: int = 2000,
     val_frac: float = 0.15,
     seed: int = 42,
+    min_obs_std: float = 1e-12,
 ) -> tuple[SDGFTGraphDataset, SDGFTGraphDataset, np.ndarray, np.ndarray, np.ndarray]:
     """Generate sweep data and split into train/val datasets.
 
@@ -78,7 +79,7 @@ def _prepare_data(
     # Keep a normalizer for each column
     target_means = targets.mean(axis=0)
     target_stds = targets.std(axis=0)
-    target_stds[target_stds < 1e-12] = 1.0  # avoid div-by-zero
+    target_stds[target_stds < min_obs_std] = 1.0  # avoid div-by-zero
     targets_norm = (targets - target_means) / target_stds
 
     # Build DAG edge index
@@ -124,6 +125,12 @@ class TrainConfig:
     loss_alpha: float = 1.0
     cosine_annealing: bool = False
     cosine_T_max: int = 0
+    # Phase D: per-observable loss weights (sensitivity-informed)
+    use_obs_weights: bool = False
+    # Phase D: relative error loss component (handles multi-scale observables)
+    relative_loss_weight: float = 0.0
+    # Phase D: minimum observable std for normalization (clip near-constants)
+    min_obs_std: float = 1e-12
 
 
 @dataclass
@@ -171,6 +178,7 @@ def train_surrogate(
         n_samples=config.n_samples,
         val_frac=config.val_frac,
         seed=config.seed,
+        min_obs_std=config.min_obs_std,
     )
 
     train_loader = DataLoader(
@@ -196,6 +204,19 @@ def train_surrogate(
     n_params_total = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params_total:,}")
 
+    # Phase D: per-observable loss weights (sensitivity-informed)
+    obs_weights_t = None
+    if config.use_obs_weights:
+        from .sensitivity import compute_jacobian, combined_sensitivity_weights
+        J, _, _ = compute_jacobian()
+        w = combined_sensitivity_weights(J, alpha=1.5)
+        # Clamp extreme weights to avoid dominating loss
+        w = np.clip(w, 0.1, 10.0)
+        obs_weights_t = torch.tensor(w, dtype=torch.float32, device=device)
+        n_low = int(np.sum(w < 0.5))
+        n_high = int(np.sum(w > 2.0))
+        print(f"  Observable weights: {n_low} down-weighted, {n_high} up-weighted")
+
     # Optimizer & scheduler
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
@@ -215,14 +236,37 @@ def train_surrogate(
     loss_fn = nn.MSELoss()
 
     def hybrid_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """MSE + log-cosh for better handling of outlier observables."""
+        """MSE + log-cosh for better handling of outlier observables.
+        Supports per-observable weighting and relative error component.
+        """
         alpha = config.loss_alpha
-        if alpha >= 1.0:
-            return loss_fn(pred, target)
-        mse = loss_fn(pred, target)
         diff = pred - target
-        logcosh = torch.mean(torch.log(torch.cosh(diff + 1e-12)))
-        return alpha * mse + (1.0 - alpha) * logcosh
+
+        if obs_weights_t is not None:
+            # Tile weights for batch: weights shape (n_nodes,) → match (B*n_nodes,)
+            B = diff.size(0) // n_nodes
+            w = obs_weights_t.repeat(B)
+            sq_err = diff ** 2 * w
+            mse = sq_err.mean()
+            logcosh = torch.mean(w * torch.log(torch.cosh(diff + 1e-12)))
+        else:
+            mse = loss_fn(pred, target)
+            logcosh = torch.mean(torch.log(torch.cosh(diff + 1e-12)))
+
+        base_loss = alpha * mse + (1.0 - alpha) * logcosh if alpha < 1.0 else mse
+
+        # Phase D: relative error loss component
+        if config.relative_loss_weight > 0:
+            # Relative MSE: ((pred - target) / (|target| + ε))²
+            rel_diff = diff / (torch.abs(target) + 0.1)
+            if obs_weights_t is not None:
+                B = diff.size(0) // n_nodes
+                w = obs_weights_t.repeat(B)
+                rel_loss = (rel_diff ** 2 * w).mean()
+            else:
+                rel_loss = (rel_diff ** 2).mean()
+            return base_loss + config.relative_loss_weight * rel_loss
+        return base_loss
 
     # Training
     history = TrainHistory()

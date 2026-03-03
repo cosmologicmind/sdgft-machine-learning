@@ -78,6 +78,8 @@ class InverterConfig:
     use_log_features: bool = False
     # v3: cosine annealing for LR
     cosine_annealing: bool = False
+    # v4: minimum floor for obs_std normalization (match surrogate)
+    min_obs_std: float = 1e-12
 
 
 @dataclass
@@ -134,7 +136,7 @@ def train_inverter(
     # Normalize observables
     obs_mean = observables.mean(axis=0)
     obs_std = observables.std(axis=0)
-    obs_std[obs_std < 1e-12] = 1.0
+    obs_std[obs_std < config.min_obs_std] = config.min_obs_std
 
     # v3: sensitivity-weighted features (rescale columns)
     sens_weights_np = None

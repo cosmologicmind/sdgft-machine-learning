@@ -42,6 +42,10 @@ class EnsembleConfig:
     loss_alpha: float = 0.7
     cosine_annealing: bool = True
     cosine_T_max: int = 0
+    # Phase D options
+    use_obs_weights: bool = False
+    relative_loss_weight: float = 0.0
+    min_obs_std: float = 1e-12
 
     def member_config(self, member_idx: int) -> TrainConfig:
         """Create a TrainConfig for ensemble member `member_idx`."""
@@ -57,6 +61,9 @@ class EnsembleConfig:
             loss_alpha=self.loss_alpha,
             cosine_annealing=self.cosine_annealing,
             cosine_T_max=self.cosine_T_max,
+            use_obs_weights=self.use_obs_weights,
+            relative_loss_weight=self.relative_loss_weight,
+            min_obs_std=self.min_obs_std,
             seed=self.base_seed + member_idx,
             save_dir=f"runs/ensemble/member_{member_idx}",
         )
