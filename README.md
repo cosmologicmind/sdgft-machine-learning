@@ -233,7 +233,7 @@ If you use this code in your research, please cite:
 @software{besemer_sdgft_ml_2026,
   author       = {Besemer, David A.},
   title        = {{SDGFT-ML}: Machine-Learning Surrogate and Inverter
-                  for Six-Dimensional Geometric Flow Theory},
+                  for Six-Dimensional Geometric Field Theory},
   year         = 2026,
   url          = {https://github.com/cosmologicmind/sdgft-machine-learning},
   version      = {0.1.0}
