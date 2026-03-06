@@ -19,6 +19,8 @@ from typing import Any, ClassVar
 import numpy as np
 import pandas as pd
 
+from sdgft_ml.physics.constants import R_P as _R_P_DEFAULT
+
 
 # ── Parametric Forward Model ─────────────────────────────────────
 
@@ -182,6 +184,14 @@ class ParametricForward:
             return float("nan")
         return nbar * (2.0 * n ** 2 - 7.0 * n + 4.0) / denom ** 2 - nbar / denom
 
+    def tensor_spectral_index(self, n: float | None = None, n_e: float | None = None) -> float:
+        """Tensor spectral index n_T = -2ε_SR (consistency relation).
+
+        For single-field slow-roll inflation the consistency relation
+        r = -8 n_T holds.  Since ε_SR is already computed, this is trivial.
+        """
+        return -2.0 * self.slow_roll_epsilon(n, n_e)
+
     @property
     def beta_iso(self) -> float:
         """β_iso = (1/6)² = 1/36 (geometric constant)."""
@@ -221,8 +231,13 @@ class ParametricForward:
 
     @property
     def sigma_8(self) -> float:
-        """σ_8 = 0.775 (MCMC anchor, not axiom-derived)."""
-        return 0.775
+        """σ_8 = Δ·π ≈ 0.6545 (analytical derivation).
+
+        The monograph identifies σ_8 = Δπ as the analytical prediction.
+        Previously hardcoded as 0.775 (MCMC anchor); now derived from
+        the axiom parameter Δ.
+        """
+        return self.delta * math.pi
 
     @property
     def s_8(self) -> float:
@@ -330,13 +345,13 @@ class ParametricForward:
 
     # ── Scale-dependent functions (sampled at characteristic scales) ──
 
-    def d_star_of_r(self, r: float, r_p: float = 1.616255e-35) -> float:
+    def d_star_of_r(self, r: float, r_p: float = _R_P_DEFAULT) -> float:
         """D*(r) = D*_IR · (r/r_P)^{-Δ²}."""
         if r <= 0 or r_p <= 0:
             return float("nan")
         return self.d_star_tree * (r / r_p) ** (-self.delta ** 2)
 
-    def omega_de_rg(self, r: float, r_p: float = 1.616255e-35) -> float:
+    def omega_de_rg(self, r: float, r_p: float = _R_P_DEFAULT) -> float:
         """Ω_DE(r) = (3/4) · (r/r_P)^{-δ_g²/D*}."""
         ds = self.d_star_of_r(r, r_p)
         if ds == 0:
@@ -376,7 +391,7 @@ class ParametricForward:
             # Level 3: gravity
             "alpha_m_tree": self.alpha_m(n_t),
             "alpha_b_tree": self.alpha_b(n_t),
-            "alpha_t": 0.0,
+            "alpha_t": 0.0,   # c_T = c exactly: f(R) ⊂ Horndeski with G₅=0 ⇒ α_T=0
             "alpha_k": 0.0,
             "eta_slip_subhorizon": self.grav_slip(n_t, k_over_aH=1e6),
             "eta_slip_survey": self.grav_slip(n_t, k_over_aH=10.0),
@@ -388,6 +403,7 @@ class ParametricForward:
             "r_tensor": self.tensor_to_scalar(n_f, n_e_f),
             "beta_iso": self.beta_iso,
             "epsilon_sr": self.slow_roll_epsilon(n_f, n_e_f),
+            "n_t": self.tensor_spectral_index(n_f, n_e_f),
             "eta_sr": self.slow_roll_eta(n_f, n_e_f),
             # Level 5-6: cosmology
             "omega_b": self.omega_b,

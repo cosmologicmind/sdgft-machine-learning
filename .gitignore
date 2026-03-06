@@ -6,6 +6,7 @@ dist/
 build/
 .eggs/
 *.egg
+.bak/
 
 # Environments
 .venv/
@@ -34,3 +35,7 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Large data (download separately – see README)
+data/sparc/
+data/*.png
